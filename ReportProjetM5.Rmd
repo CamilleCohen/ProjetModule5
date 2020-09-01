@@ -1,0 +1,200 @@
+---
+title: "2020-09-01_Projet_M5"
+author: "Camille COHEN"
+date: "le `r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    code_folding: hide
+    df_print: paged
+    fig_caption: yes
+    number_sections: yes
+    theme: paper
+    toc: yes
+    toc_depth: 3
+  word_document:
+    toc: yes
+    toc_depth: '3'
+  pdf_document: default
+editor_options:
+  chunk_output_type: inline
+---
+
+# DU-Bii 2020 :  Examen final Modules 4 et 5 
+
+Nous allons vous faire faire un analyse simple, de données de reséquençage d'un génome bactérien.
+Les données sont issues de cet article :  "Complete Genome Sequences of 13 Bacillus subtilis Soil Isolates for Studying Secondary Metabolite Diversity"  (doi:10.1128/MRA.01406-19)
+
+## Objectif :
+Nous allons vous demander de faire une première analyse de ces données, et de nous la rendre sous la forme d'un rapport qui trace l'ensemble des étapes suivies. 
+Ce rapport devra être mis à nôtre disposition dans un dépôt public GitHub. Les analyses devront pouvoir être rejouées sur le cluster de l'IFB.
+
+Données d'entrées :
+- Identifiant du run : SRR10390685
+- Génome de référence : NC_000964
+    - Gff https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/009/045/GCF_000009045.1_ASM904v1/GCF_000009045.1_ASM904v1_genomic.gff.gz
+    - Fasta https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/009/045/GCF_000009045.1_ASM904v1/GCF_000009045.1_ASM904v1_genomic.fna.gz
+
+## Analyse :
+
+Voici le dossier contenant les données et les résultats obtenus pendant l'analyse : 
+ ![Tree](Capture d’écran 2020-09-01 à 22.04.18.png)
+
+### Téléchargement des données depuis les banques publiques
+Pour le génome de référence, le fichier fasta et gff vont être téléchargé avec l'outil *wget* qui permet de récupérer les données à partir d'un URL donné. 
+
+```{bash eval=FALSE, include=FALSE}
+#Création du dossier Data 
+mkdir "Data"
+#on va dans le dossier data pour enregistrer les données dedans
+cd ~/ProjetM5/Data
+#wget permet de télécharger les données à partir de l'URL donné 
+wget https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/009/045/GCF_000009045.1_ASM904v1/GCF_000009045.1_ASM904v1_genomic.gff.gz 
+wget https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/009/045/GCF_000009045.1_ASM904v1/GCF_000009045.1_ASM904v1_genomic.fna.gz
+```
+
+Pour pouvoir par la suite utiliser le fichier fasta et le gff, il faut dézipper les fichiers avec l'outil *gzip*
+
+```{bash eval=FALSE, include=FALSE}
+gzip -d GCF_000009045.1_ASM904v1_genomic.fna.gz
+gzip -d GCF_000009045.1_ASM904v1_genomic.gff.gz
+```
+
+
+Pour récupérer les données de séquencage, on a besoin du module *sra-tools* qui permet de récupérer les données inscrites dans la base de données SRA. Pour cela on utilise l'outil *faster-dump*. Et je zippe les fichiers fastq afin qu'ils prennent moins de place. 
+
+```{bash eval=FALSE, include=FALSE}
+# je vais chercher l'outil sra tools 
+module load sra-tools
+
+# la commande fasterq-dump permet de récupérer les fichiers fastq associé au numéro SRA: SRR10390685
+# -S pour que chaque run soit dans un fichier 
+# cpus limités à 8 
+srun --cpus-per-task=8 fasterq-dump -S SRR10390685 --outdir . --threads 8
+gzip SRR10390685_1.fastq
+gzip SRR10390685_2.fastq 
+```
+
+### Contrôle qualité des données brutes (reads)
+
+Pour le contrôle qualité on utilise FastQC. 
+
+```{bash eval=FALSE, include=FALSE}
+module load fastqc
+cd ~/ProjetM5 
+mkdir "FastQC"
+
+cd ~/ProjetM5/FastQC
+#-o output dans le répertoire actuel -t threads à 8
+srun --cpus-per-task=8 fastqc ~/ProjetM5/Data/SRR10390685_1.fastq.gz -o . -t 8
+srun --cpus-per-task=8 fastqc ~/ProjetM5/Data/SRR10390685_2.fastq.gz -o . -t 8
+```
+
+#### La qualité des bases vous paraît-elle satisfaisante ? Pourquoi ?
+    
+[Cliquer ici pour voir le Rapport FastQC](https://rstudio.cluster.france-bioinformatique.fr/file_show?path=%2Fshared%2Fmfs%2Fdata%2Fhome%2Fccohen%2FProjetM5%2FFastQC%2FSRR10390685_2_fastqc.html)
+
+La qualité des reads semblent correctes déjà par la longueur des reads entre 130 et 150pb , la qualité par séquence ne depasse la zone verte , ce qui indique peut de dégradation des reads, et il y a peu de N dans les reads obtenus. 
+
+#### Quelle est la profondeur de séquençage (calculée par rapport à la taille du génome de référence) ?
+    
+Le génome de référence fait 4,215,606 pb et on a séquencé 7,066,055 reads d'environ 140pb. On a un profondeur de 200. 
+
+### Nettoyage des reads
+
+Pour nettoyer on filtre la qualité des reads et on retire les adaptateurs de séquencage , ou trimmer les séquences,  avec *fastp*. 
+
+
+```{bash eval=FALSE, include=FALSE}
+module load fastp
+srun --cpus-per-task=8 fastp --in1 ~/ProjetM5/Data/SRR10390685_1.fastq.gz --in2 ~/ProjetM5/Data/SRR10390685_2.fastq.gz -l 100 --out1 ~/ProjetM5/Data/SRR10390685_1.paired.fastq.gz --out2 ~/ProjetM5/Data/SRR10390685_2.paired.fastq.gz --unpaired1 ~/ProjetM5/Data/SRR10390685_unpaired.fastq.gz --unpaired2 ~/ProjetM5/Data/SRR10390685_unpaired.fastq.gz -w 1 -h Reportfastp.html -t 8
+```
+
+[Cliquer ici pour voir le Rapport Fastp](https://rstudio.cluster.france-bioinformatique.fr/file_show?path=%2Fshared%2Fmfs%2Fdata%2Fhome%2Fccohen%2FProjetM5%2FFastQC%2FReportfastp.html)
+
+####Quel pourcentage de reads sont filtrés et pourquoi ?
+    
+97% des reads ont été filtrés par rapport à leur qualité.
+    
+### Alignement des reads contre le génome de reférence
+
+Pour le mapping on utilise le mappeur *BWA* 
+
+```{bash eval=FALSE, include=FALSE}
+cd ~/ProjetM5/
+
+######## Indexing and Mapping  ##############
+
+module load samtools
+module load bwa
+
+mkdir "Mapping"
+
+cd ~/ProjetM5/Mapping
+
+#Indexation du fichier fasta
+
+samtools faidx GCF_000009045.1_ASM904v1_genomic.fna
+
+#Indexation du génome pour BWA
+srun bwa index ~/ProjetM5/Data/GCF_000009045.1_ASM904v1_genomic.fna
+
+#Mapping avec l'outil BWA pour le samtools view -h permet de mettre un header au fichier et -b pour une sortie en bam.
+srun --cpus-per-task=4 bwa mem ~/ProjetM5/Data/GCF_000009045.1_ASM904v1_genomic.fna ~/ProjetM5/Data/SRR10390685_1.paird.fastq.gz ~/ProjetM5/Data/SRR10390685_2.paired.fastq.gz -t 3 | samtools view -hb - > MappingBWA_SRR10390685.bam
+
+#Statistiques du mapping 
+samtools flagstat MappingBWA_SRR10390685.bam
+
+#Tri du fichier bam
+samtools sort MappingBWA_SRR10390685.bam -o MappingBWA_SRR10390685_sorted.bam
+
+```
+
+#### Quel est le % de reads pairés alignés ?
+
+ le % de reads alignés est de 94.49%
+ 
+ ![Flagstats](Capture d’écran 2020-09-01 à 21.45.53.png)
+
+    
+
+### Extraire dans un fichier BAM les reads chevauchant à au moins 50% le gène trmNF
+
+Pour extraire cette donnée nous devons tout d'abord récupérer la position du gène "trmNF" pour cela on va utiliser tout d'abord *grep* pour récupérer les lignes contenant le nom du gène . On constate que nous avons deux lignes, donc on utilise *awk* pour sélectionner que les lignes dont la colonne 3 contient "gene". 
+
+
+```{bash eval=FALSE, include=FALSE}
+#Je cherche toutes les lignes ayant le mot "trmNF"
+grep trmNF ~/ProjetM5/Data/GCF_000009045.1_ASM904v1_genomic.gff > ~/ProjetM5/Data/Gene_trmNF.gff
+#je récupère toutes les lignes dont la colonne contient "gene"
+awk '$3=="gene"' > ~/ProjetM5/Data/Gene_trmNF.gff
+```
+
+
+Ensuite on utilise *intersect* de bedtools qui va nous permettre de connaitre le hcevauchement des reads sur plus de 50% du gène 
+
+```{bash eval=FALSE, include=FALSE}
+module load bedtools
+cd ~/ProjetM5/Mapping
+#On indexe le fichier bam trié pour intersect
+srun samtools index MappingBWA_SRR10390685_sorted.bam 
+#intersect permet de connaitre les reads qui couvre au moins 50% du gène -a cible 1 et on met notre fichier bam, -b cible 2 le gène ciblé et -f à 0,5 permet de voir les reads (a) qui chevauchent à 50% le gene (b)
+bedtools intersect -a MappingBWA_SRR10390685_sorted.bam -b ~/ProjetM5/Data/Gene_trmNF.gff -f 0.5 > Mapping_inter50_trmNF.bam
+#Visualisation du bam
+samtools view -c Mapping_inter50_trmNF.bam
+```
+
+Pour mon analyse, je trouve 0 reads chevauchant 50% du gène. 
+
+### Logiciels utilisés: 
+
+ bwa/0.7.17  
+ 
+ samtools/1.10 
+ 
+ fastp/0.20.0
+ 
+ fastqc/0.11.9
+ 
+ bedtools/2.29.2
+ 
+ sra-tools/2.10.3 
